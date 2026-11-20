@@ -24,13 +24,28 @@ jobs:
         run: ./gradlew :app:assembleDebug :app:testDebugUnitTest --no-daemon
       - name: Verify debug APK is signed with the pinned debug key
         run: |
-          set -euo pipefail
+          set -uo pipefail
+          EXPECTED="d243d7b6247feb0d119ffb1171b086c14dd21c827b42c6d1efb8275f7ad0d4e6"
+          APK=app/build/outputs/apk/debug/app-debug.apk
           SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
-          APKSIGNER="$(ls "$SDK"/build-tools/*/apksigner | sort -V | tail -n1)"
-          ACTUAL="$("$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk \
-            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n1 | tr -d ':' | tr 'A-F' 'a-f')"
-          echo "APK signer SHA-256: $ACTUAL"
-          test "$ACTUAL" = "d243d7b6247feb0d119ffb1171b086c14dd21c827b42c6d1efb8275f7ad0d4e6"
+          APKSIGNER="$(ls -1 "$SDK"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n1)"
+          echo "apksigner: ${APKSIGNER:-<none>} ($("${APKSIGNER:-false}" --version 2>&1 || true))"
+          # Merge stderr: some apksigner builds log cert details there.
+          if ! OUT="$("$APKSIGNER" verify --print-certs "$APK" 2>&1)"; then
+            printf '%s\n' "$OUT"
+            echo "::error::apksigner verify failed for $APK"
+            exit 1
+          fi
+          printf '%s\n' "$OUT"
+          # Tolerate label casing/indentation differences across build-tools versions.
+          ACTUAL="$(printf '%s\n' "$OUT" | grep -i 'certificate SHA-256 digest' | head -n1 \
+            | sed 's/.*[Dd]igest:[[:space:]]*//' | tr -d ':\r' | tr 'A-F' 'a-f')"
+          echo "APK signer SHA-256: [${ACTUAL}]"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::debug APK is not signed with the pinned debug key (got '${ACTUAL:-none}', expected $EXPECTED)"
+            exit 1
+          fi
+          echo "OK: debug APK signed with the pinned debug key"
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:

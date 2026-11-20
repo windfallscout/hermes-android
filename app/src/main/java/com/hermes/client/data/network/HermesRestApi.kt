@@ -124,7 +124,9 @@ class HermesRestApi(
         val liveByProvider = coroutineScope {
             providersNeedingLiveModels(dto.providers, dto.activeProvider)
                 .associateWith { id ->
-                    async {
+                    // Dispatchers.IO (not the caller's dispatcher) so the budget below is real
+                    // wall-clock time rather than a virtual-clock jump under runTest.
+                    async(Dispatchers.IO) {
                         withTimeoutOrNull(LIVE_MODELS_TIMEOUT_MS) {
                             runCatching { liveModels(id) }
                                 .onFailure { if (it is CancellationException) throw it }

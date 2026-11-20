@@ -73,6 +73,26 @@ data class ModelOptionDto(
 )
 @Serializable data class ModelOptionsDto(val providers: List<ModelProviderDto> = emptyList())
 
+/** GET /api/providers — the real catalog on current servers (replaces /api/model/options). */
+@Serializable data class ProviderDto(
+    val id: String = "",
+    @SerialName("display_name") val displayName: String? = null,
+    @SerialName("has_key") val hasKey: Boolean = false,
+    val models: List<String> = emptyList(),
+    @SerialName("models_total") val modelsTotal: Int = 0,
+)
+@Serializable data class ProvidersDto(
+    val providers: List<ProviderDto> = emptyList(),
+    @SerialName("active_provider") val activeProvider: String? = null,
+)
+
+/** GET /api/models/live?provider=<slug> — the provider's live model ids. */
+@Serializable data class LiveModelsDto(
+    val provider: String? = null,
+    val models: List<String> = emptyList(),
+    val count: Int = 0,
+)
+
 @Serializable data class SessionStatsDto(
     val total: Int = 0,
     @SerialName("active_store") val activeStore: Int = 0,

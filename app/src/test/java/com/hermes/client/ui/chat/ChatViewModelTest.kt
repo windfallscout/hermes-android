@@ -294,4 +294,57 @@ class ChatViewModelTest {
         assertTrue("a gateway rejection must surface a persona error", vm.personaUi.value.error != null)
         assertEquals(null, vm.personaUi.value.active)
     }
+
+    @Test fun onEffortChange_switches_to_sibling_model_when_catalog_has_one() = runTest {
+        coEvery { modelRepo.providers() } returns listOf(
+            com.hermes.client.data.network.ModelProviderDto(
+                slug = "opencode-go",
+                models = listOf("claude-opus-5-5-low", "claude-opus-5-5-high"),
+            ),
+        )
+        val vm = buildVm()
+        vm.open("s1"); advanceUntilIdle()
+        vm.onSelectFromSheet("opencode-go", "claude-opus-5-5-low") {}; advanceUntilIdle()
+
+        vm.onEffortChange("high"); advanceUntilIdle()
+
+        coVerify { chatRepo.slashExec("s1", "/model claude-opus-5-5-high --provider opencode-go --session") }
+        assertEquals("claude-opus-5-5-high", vm.currentModel.value)
+        assertEquals(null, vm.currentEffort.value)
+        assertFalse(vm.modelSheet.value.pending)
+        assertEquals(null, vm.modelSheet.value.error)
+    }
+
+    @Test fun onEffortChange_sends_reasoning_slash_when_no_sibling_exists() = runTest {
+        coEvery { modelRepo.providers() } returns listOf(
+            com.hermes.client.data.network.ModelProviderDto(
+                slug = "anthropic",
+                models = listOf("claude-opus-5-5"),
+            ),
+        )
+        val vm = buildVm()
+        vm.open("s1"); advanceUntilIdle()
+        vm.onSelectFromSheet("anthropic", "claude-opus-5-5") {}; advanceUntilIdle()
+
+        vm.onEffortChange("xhigh"); advanceUntilIdle()
+
+        coVerify { chatRepo.slashExec("s1", "/reasoning xhigh") }
+        assertEquals("xhigh", vm.currentEffort.value)
+        assertFalse(vm.modelSheet.value.pending)
+        assertEquals(null, vm.modelSheet.value.error)
+    }
+
+    @Test fun onEffortChange_default_scope_appends_global_and_surfaces_error_on_failure() = runTest {
+        coEvery { chatRepo.slashExec("s1", "/reasoning medium --global") } throws RuntimeException("reasoning failed")
+        val vm = buildVm()
+        vm.open("s1"); advanceUntilIdle()
+        vm.onSheetScope(com.hermes.client.ui.models.ModelScope.DEFAULT)
+
+        vm.onEffortChange("medium"); advanceUntilIdle()
+
+        coVerify { chatRepo.slashExec("s1", "/reasoning medium --global") }
+        assertEquals(null, vm.currentEffort.value)
+        assertFalse(vm.modelSheet.value.pending)
+        assertEquals("reasoning failed", vm.modelSheet.value.error)
+    }
 }

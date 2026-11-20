@@ -1,7 +1,8 @@
 name: CI
 
 # Build + unit-test every push and PR to the production and beta branches.
-# Uses an unsigned debug build, so it needs no secrets.
+# Signed with the committed pinned debug keystore (app/debug.keystore) so debug
+# APKs keep a stable signature — still no secrets required.
 on:
   push:
     branches: [main, dev]
@@ -19,5 +20,35 @@ jobs:
           java-version: '21'
       - uses: android-actions/setup-android@v4
       - run: chmod +x ./gradlew
-      - name: Build & unit test (unsigned debug)
+      - name: Build & unit test (debug)
         run: ./gradlew :app:assembleDebug :app:testDebugUnitTest --no-daemon
+      - name: Verify debug APK is signed with the pinned debug key
+        run: |
+          set -uo pipefail
+          EXPECTED="d243d7b6247feb0d119ffb1171b086c14dd21c827b42c6d1efb8275f7ad0d4e6"
+          APK=app/build/outputs/apk/debug/app-debug.apk
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          APKSIGNER="$(ls -1 "$SDK"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -n1)"
+          echo "apksigner: ${APKSIGNER:-<none>} ($("${APKSIGNER:-false}" --version 2>&1 || true))"
+          # Merge stderr: some apksigner builds log cert details there.
+          if ! OUT="$("$APKSIGNER" verify --print-certs "$APK" 2>&1)"; then
+            printf '%s\n' "$OUT"
+            echo "::error::apksigner verify failed for $APK"
+            exit 1
+          fi
+          printf '%s\n' "$OUT"
+          # Tolerate label casing/indentation differences across build-tools versions.
+          ACTUAL="$(printf '%s\n' "$OUT" | grep -i 'certificate SHA-256 digest' | head -n1 \
+            | sed 's/.*[Dd]igest:[[:space:]]*//' | tr -d ':\r' | tr 'A-F' 'a-f')"
+          echo "APK signer SHA-256: [${ACTUAL}]"
+          if [ "$ACTUAL" != "$EXPECTED" ]; then
+            echo "::error::debug APK is not signed with the pinned debug key (got '${ACTUAL:-none}', expected $EXPECTED)"
+            exit 1
+          fi
+          echo "OK: debug APK signed with the pinned debug key"
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: hermes-debug-apk
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error

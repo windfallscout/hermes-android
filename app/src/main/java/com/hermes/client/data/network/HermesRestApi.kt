@@ -1,8 +1,12 @@
 package com.hermes.client.data.network
 
 import com.hermes.client.data.auth.GatewayConfig
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -102,14 +106,55 @@ class HermesRestApi(
     suspend fun activeProfile(): String? =
         get<ActiveProfileDto>("/api/profiles/active").let { it.current ?: it.active }
 
+    /** Live model ids for [provider] from /api/models/live. */
+    suspend fun liveModels(provider: String): List<String> {
+        val encoded = java.net.URLEncoder.encode(provider, "UTF-8")
+        return modelIds(get<LiveModelsDto>("/api/models/live?provider=$encoded").models)
+    }
+
+    /**
+     * Provider catalog from /api/providers enriched concurrently with /api/models/live.
+     *
+     * The live lookup is per-provider and can be slow on a cache miss, so each one is bounded:
+     * a provider that does not answer within [LIVE_MODELS_TIMEOUT_MS] keeps its static list
+     * rather than holding up the whole picker.
+     */
+    suspend fun providers(): List<ModelProviderDto> {
+        val dto = get<ProvidersDto>("/api/providers")
+        val liveByProvider = coroutineScope {
+            providersNeedingLiveModels(dto.providers, dto.activeProvider)
+                .associateWith { id ->
+                    // Dispatchers.IO (not the caller's dispatcher) so the budget below is real
+                    // wall-clock time rather than a virtual-clock jump under runTest.
+                    async(Dispatchers.IO) {
+                        withTimeoutOrNull(LIVE_MODELS_TIMEOUT_MS) {
+                            runCatching { liveModels(id) }
+                                .onFailure { if (it is CancellationException) throw it }
+                                .getOrDefault(emptyList())
+                        }.orEmpty()
+                    }
+                }
+                .mapValues { (_, deferred) -> deferred.await() }
+        }
+        return dto.providers.map { row ->
+            val base = providerToDto(row, dto.activeProvider)
+            val live = liveByProvider[row.id].orEmpty()
+            base.copy(models = mergeModels(base.models, live))
+        }
+    }
+
     /** Raw provider list (each provider carries its model strings + an is_current flag). */
     suspend fun modelProviders(): List<ModelProviderDto> =
-        get<ModelOptionsDto>("/api/model/options").providers
-
-    suspend fun modelOptions(): List<ModelOptionDto> =
-        get<ModelOptionsDto>("/api/model/options").providers.flatMap { p ->
-            p.models.map { m -> ModelOptionDto(provider = p.slug, model = m, label = m) }
+        try {
+            providers()
+        } catch (e: HermesApiException) {
+            if (shouldFallBackToModelOptions(e.code)) get<ModelOptionsDto>("/api/model/options").providers
+            else throw e
         }
+
+    /** Flattened list of (provider, model) options derived from [modelProviders]. */
+    suspend fun modelOptions(): List<ModelOptionDto> =
+        modelProviders().flatMap { p -> p.models.map { m -> ModelOptionDto(provider = p.slug, model = m, label = m) } }
 
     suspend fun setModel(provider: String, model: String) = withContext(Dispatchers.IO) {
         val obj: JsonObject = buildJsonObject {
@@ -359,5 +404,10 @@ class HermesRestApi(
         okHttp.newCall(builder("/api/profiles/active").post(payload).build()).execute().use { resp ->
             if (!resp.isSuccessful) throw HermesApiException(resp.code, "set active profile failed")
         }
+    }
+
+    private companion object {
+        /** Per-provider budget for the live model lookup; static models are the fallback. */
+        const val LIVE_MODELS_TIMEOUT_MS = 8_000L
     }
 }

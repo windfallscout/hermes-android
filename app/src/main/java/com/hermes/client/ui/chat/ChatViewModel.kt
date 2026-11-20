@@ -57,9 +57,42 @@ class ChatViewModel @Inject constructor(
     private val _providers = MutableStateFlow<List<com.hermes.client.data.network.ModelProviderDto>>(emptyList())
     val providers: kotlinx.coroutines.flow.StateFlow<List<com.hermes.client.data.network.ModelProviderDto>> = _providers.asStateFlow()
 
+    /** Catalog fetch state for the model sheet — a failure must show an error + Retry, never spin. */
+    data class ProviderLoadUi(val loading: Boolean = false, val error: String? = null)
+    private val _providerLoad = MutableStateFlow(ProviderLoadUi())
+    val providerLoad: StateFlow<ProviderLoadUi> = _providerLoad.asStateFlow()
+
+    /** (Re)load the provider catalog; clears any selection spinner first so a fetch never looks stuck. */
+    private fun loadProviders() {
+        if (_providerLoad.value.loading) return
+        _modelSheet.value = _modelSheet.value.copy(pending = false)
+        _providerLoad.value = ProviderLoadUi(loading = true)
+        viewModelScope.launch {
+            runCatching { modelRepo.providers() }
+                .onSuccess {
+                    _providers.value = it
+                    _providerLoad.value = ProviderLoadUi()
+                }
+                .onFailure { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    _providerLoad.value = ProviderLoadUi(
+                        loading = false,
+                        error = e.message ?: "Failed to load models",
+                    )
+                }
+        }
+    }
+
+    /** Retry the catalog fetch after a failure (model sheet's Retry action). */
+    fun retryProviders() = loadProviders()
+
     // Provider of the confirmed session model (set together with _currentModel on a successful switch).
     private val _currentProvider = MutableStateFlow<String?>(null)
     val currentProvider: kotlinx.coroutines.flow.StateFlow<String?> = _currentProvider.asStateFlow()
+
+    // Explicit thinking effort for the current session (null falls back to any suffix on _currentModel).
+    private val _currentEffort = MutableStateFlow<String?>(null)
+    val currentEffort: StateFlow<String?> = _currentEffort.asStateFlow()
 
     // Text handed off from a share (Share-to-Hermes). ChatScreen pre-fills the composer with it once.
     private val _initialDraft = MutableStateFlow<String?>(null)
@@ -111,6 +144,7 @@ class ChatViewModel @Inject constructor(
 
     fun open(id: String) {
         sessionId = id
+        _currentEffort.value = null
         connJob?.cancel()
         // A share created this session and stashed its text; surface it as the initial composer draft.
         val ps = pendingShareStore.take(id)
@@ -157,7 +191,7 @@ class ChatViewModel @Inject constructor(
                 }
             }
             // Load model options, profiles, and the slash-command catalog; failures are non-fatal
-            launch { runCatching { _providers.value = modelRepo.providers() } }
+            loadProviders()
             launch { runCatching { _profiles.value = profileRepo.list() } }
             launch { runCatching { _commands.value = chat.commandsCatalog() } }
         }
@@ -302,38 +336,93 @@ class ChatViewModel @Inject constructor(
      */
     fun onSelectFromSheet(provider: String, model: String, onDone: () -> Unit) {
         _modelSheet.value = _modelSheet.value.copy(pending = true, error = null)
+        val scope = _modelSheet.value.scope
         viewModelScope.launch {
-            when (_modelSheet.value.scope) {
-                com.hermes.client.ui.models.ModelScope.SESSION ->
-                    runCatching { chat.slashExec(sessionId, "/model $model --provider $provider --session") }
-                        .onSuccess {
-                            _currentModel.value = model
-                            _currentProvider.value = provider
-                            _modelSheet.value = ModelSheetUi()  // reset + clear pending/error
-                            onDone()
-                        }
-                        .onFailure { e ->
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            _modelSheet.value = _modelSheet.value.copy(
-                                pending = false,
-                                error = e.message ?: "Couldn't switch model.",
-                            )
-                        }
-                com.hermes.client.ui.models.ModelScope.DEFAULT ->
-                    runCatching { modelRepo.set(provider, model) }
-                        .onSuccess {
-                            _modelSheet.value = _modelSheet.value.copy(pending = false, error = null)
-                            appendSystem("Default set to $model")
-                            onDone()
-                        }
-                        .onFailure { e ->
-                            if (e is kotlinx.coroutines.CancellationException) throw e
-                            _modelSheet.value = _modelSheet.value.copy(
-                                pending = false,
-                                error = e.message ?: "Couldn't set default model.",
-                            )
-                        }
+            switchModel(provider, model, scope) {
+                if (scope == com.hermes.client.ui.models.ModelScope.SESSION) {
+                    _currentModel.value = model
+                    _currentProvider.value = provider
+                    _currentEffort.value = null
+                    _modelSheet.value = ModelSheetUi()  // reset + clear pending/error
+                } else {
+                    _modelSheet.value = _modelSheet.value.copy(pending = false, error = null)
+                }
+                onDone()
             }
+        }
+    }
+
+    /**
+     * Apply a thinking-effort level. Switches to a sibling catalog model if the current provider
+     * publishes one; otherwise sends `/reasoning <level>` (or `--global` when scope is DEFAULT).
+     */
+    fun onEffortChange(level: String) {
+        _modelSheet.value = _modelSheet.value.copy(pending = true, error = null)
+        val scope = _modelSheet.value.scope
+        val provider = _currentProvider.value
+        val sibling = com.hermes.client.ui.models.effortVariantOf(
+            _providers.value, provider, _currentModel.value, level,
+        )
+        viewModelScope.launch {
+            if (sibling != null && provider != null) {
+                switchModel(provider, sibling, scope) {
+                    _currentModel.value = sibling
+                    _currentProvider.value = provider
+                    _currentEffort.value = null
+                    _modelSheet.value = _modelSheet.value.copy(pending = false, error = null)
+                }
+            } else {
+                val cmd = if (scope == com.hermes.client.ui.models.ModelScope.DEFAULT) {
+                    "/reasoning $level --global"
+                } else {
+                    "/reasoning $level"
+                }
+                runCatching { chat.slashExec(sessionId, cmd) }
+                    .onSuccess {
+                        _currentEffort.value = level
+                        _modelSheet.value = _modelSheet.value.copy(pending = false, error = null)
+                    }
+                    .onFailure { e ->
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        _modelSheet.value = _modelSheet.value.copy(
+                            pending = false,
+                            error = e.message ?: "Couldn't set thinking effort.",
+                        )
+                    }
+            }
+        }
+    }
+
+    private suspend fun switchModel(
+        provider: String,
+        model: String,
+        scope: com.hermes.client.ui.models.ModelScope,
+        onSuccess: () -> Unit,
+    ) {
+        when (scope) {
+            com.hermes.client.ui.models.ModelScope.SESSION ->
+                runCatching { chat.slashExec(sessionId, "/model $model --provider $provider --session") }
+                    .onSuccess { onSuccess() }
+                    .onFailure { e ->
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        _modelSheet.value = _modelSheet.value.copy(
+                            pending = false,
+                            error = e.message ?: "Couldn't switch model.",
+                        )
+                    }
+            com.hermes.client.ui.models.ModelScope.DEFAULT ->
+                runCatching { modelRepo.set(provider, model) }
+                    .onSuccess {
+                        appendSystem("Default set to $model")
+                        onSuccess()
+                    }
+                    .onFailure { e ->
+                        if (e is kotlinx.coroutines.CancellationException) throw e
+                        _modelSheet.value = _modelSheet.value.copy(
+                            pending = false,
+                            error = e.message ?: "Couldn't set default model.",
+                        )
+                    }
         }
     }
 

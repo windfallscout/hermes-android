@@ -1,17 +1,20 @@
 package com.hermes.client.ui.models
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.rounded.Star
 import androidx.compose.material.icons.rounded.StarBorder
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -22,14 +25,34 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.hermes.client.data.network.ModelProviderDto
 import com.hermes.client.data.repository.favKey
+
+/**
+ * What the catalog area of the picker should render. An error always wins over the spinner, so a
+ * failed catalog fetch can never present as endless loading.
+ */
+sealed interface CatalogStatus {
+    data object Loading : CatalogStatus
+    data class Failed(val message: String) : CatalogStatus
+    data object Ready : CatalogStatus
+}
+
+fun catalogStatus(loading: Boolean, error: String?): CatalogStatus = when {
+    !error.isNullOrBlank() -> CatalogStatus.Failed(error)
+    loading -> CatalogStatus.Loading
+    else -> CatalogStatus.Ready
+}
 
 /** Which model slot a selection applies to. */
 enum class ModelScope { SESSION, DEFAULT }
@@ -39,6 +62,7 @@ data class ModelRow(
     val model: String,
     val isFavorite: Boolean,
     val isCurrent: Boolean,
+    val effort: String? = null,
 )
 
 sealed interface ModelListItem {
@@ -60,12 +84,16 @@ fun modelSelectorRows(
 ): List<ModelListItem> {
     val q = query.trim().lowercase()
     fun matches(provider: String, model: String) =
-        q.isEmpty() || model.lowercase().contains(q) || provider.lowercase().contains(q)
+        q.isEmpty() ||
+            model.lowercase().contains(q) ||
+            provider.lowercase().contains(q) ||
+            "$provider:$model".lowercase().contains(q)
     fun rowOf(provider: String, model: String) = ModelRow(
         provider = provider,
         model = model,
         isFavorite = favKey(provider, model) in favorites,
         isCurrent = provider == currentProvider && model == currentModel,
+        effort = parseEffortSuffix(model)?.effort,
     )
 
     val items = mutableListOf<ModelListItem>()
@@ -103,6 +131,11 @@ fun ModelSelectorContent(
     pending: Boolean,
     error: String?,
     modifier: Modifier = Modifier,
+    effort: String? = null,
+    onEffortChange: ((String) -> Unit)? = null,
+    catalogLoading: Boolean = false,
+    catalogError: String? = null,
+    onRetry: (() -> Unit)? = null,
 ) {
     Column(modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         if (scope != null) {
@@ -117,6 +150,28 @@ fun ModelSelectorContent(
                     onClick = { onScopeChange(ModelScope.DEFAULT) },
                     shape = SegmentedButtonDefaults.itemShape(index = 1, count = 2),
                 ) { Text("Default") }
+            }
+        }
+
+        if (onEffortChange != null) {
+            Column(Modifier.fillMaxWidth().padding(top = 8.dp)) {
+                Text(
+                    "Thinking effort",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                LazyRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                ) {
+                    items(SELECTABLE_EFFORTS) { level ->
+                        FilterChip(
+                            selected = level == effort,
+                            onClick = { onEffortChange(level) },
+                            label = { Text(effortLabel(level)) },
+                        )
+                    }
+                }
             }
         }
 
@@ -136,8 +191,37 @@ fun ModelSelectorContent(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             )
         }
-        if (pending) {
+        val status = catalogStatus(catalogLoading, catalogError)
+        // One spinner at a time: a catalog fetch is already rendering the loading row above.
+        if (pending && status != CatalogStatus.Loading) {
             CircularProgressIndicator(Modifier.padding(vertical = 8.dp))
+        }
+
+        when (status) {
+            is CatalogStatus.Failed -> Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = status.message,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f).padding(end = 8.dp),
+                )
+                if (onRetry != null) {
+                    TextButton(onClick = onRetry) { Text("Retry") }
+                }
+            }
+            CatalogStatus.Loading -> CircularProgressIndicator(Modifier.padding(vertical = 8.dp))
+            CatalogStatus.Ready -> if (items.isEmpty()) {
+                Text(
+                    text = "No models found.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 8.dp),
+                )
+            }
         }
 
         LazyColumn(Modifier.fillMaxWidth()) {
@@ -148,7 +232,9 @@ fun ModelSelectorContent(
                         style = MaterialTheme.typography.titleSmall,
                         color = if (item.isCurrent) LocalProfileAccent.current.accent
                         else MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(start = 4.dp, top = 14.dp, bottom = 4.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(start = 4.dp, top = 14.dp, bottom = 4.dp),
                     )
                     is ModelListItem.Row -> ModelRowItem(item.row, onToggleFavorite, onSelect)
                 }
@@ -163,6 +249,7 @@ private fun ModelRowItem(
     onToggleFavorite: (String, String) -> Unit,
     onSelect: (String, String) -> Unit,
 ) {
+    val accent = LocalProfileAccent.current.accent
     Row(
         Modifier
             .fillMaxWidth()
@@ -170,26 +257,42 @@ private fun ModelRowItem(
             .padding(vertical = 10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Column(Modifier.weight(1f)) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(end = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            // Allow full model IDs (often 40-80 chars, e.g. provider:org/model:variant) to wrap
+            // cleanly rather than ellipsizing mid-name or hiding the current-model indicator.
             Text(
-                row.model + if (row.isCurrent) "  ·  current" else "",
+                text = row.model,
                 style = MaterialTheme.typography.bodyLarge,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
+                fontWeight = if (row.isCurrent) FontWeight.Medium else null,
             )
             Text(
-                row.provider,
+                text = buildAnnotatedString {
+                    append(row.provider)
+                    if (row.effort != null) {
+                        append("  ·  ")
+                        append(row.effort)
+                    }
+                    if (row.isCurrent) {
+                        append("  ·  ")
+                        withStyle(SpanStyle(color = accent, fontWeight = FontWeight.Medium)) {
+                            append("current")
+                        }
+                    }
+                },
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
             )
         }
         IconButton(onClick = { onToggleFavorite(row.provider, row.model) }) {
             Icon(
                 imageVector = if (row.isFavorite) Icons.Rounded.Star else Icons.Rounded.StarBorder,
                 contentDescription = if (row.isFavorite) "Unfavorite" else "Favorite",
-                tint = if (row.isFavorite) LocalProfileAccent.current.accent
+                tint = if (row.isFavorite) accent
                 else MaterialTheme.colorScheme.onSurfaceVariant,
             )
         }
@@ -208,7 +311,12 @@ fun ModelSelectorSheet(
     onSelect: (provider: String, model: String) -> Unit,
     pending: Boolean,
     error: String?,
+    catalogLoading: Boolean = false,
+    catalogError: String? = null,
+    onRetry: (() -> Unit)? = null,
     onDismiss: () -> Unit,
+    effort: String? = null,
+    onEffortChange: ((String) -> Unit)? = null,
 ) {
     val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
     ModalBottomSheet(onDismissRequest = onDismiss, sheetState = sheetState) {
@@ -223,6 +331,11 @@ fun ModelSelectorSheet(
             onToggleFavorite = onToggleFavorite, onSelect = onSelect,
             pending = pending, error = error,
             modifier = Modifier.padding(bottom = 24.dp),
+            effort = effort,
+            onEffortChange = onEffortChange,
+            catalogLoading = catalogLoading,
+            catalogError = catalogError,
+            onRetry = onRetry,
         )
     }
 }

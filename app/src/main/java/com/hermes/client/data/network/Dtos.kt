@@ -1,7 +1,17 @@
 package com.hermes.client.data.network
 
+import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.descriptors.PrimitiveKind
+import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
+import kotlinx.serialization.descriptors.SerialDescriptor
+import kotlinx.serialization.encoding.Decoder
+import kotlinx.serialization.encoding.Encoder
+import kotlinx.serialization.json.JsonDecoder
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 
 @Serializable data class StatusDto(val ok: Boolean = true)
 
@@ -72,6 +82,60 @@ data class ModelOptionDto(
     val models: List<String> = emptyList(),
 )
 @Serializable data class ModelOptionsDto(val providers: List<ModelProviderDto> = emptyList())
+
+/**
+ * One model entry as the gateway publishes it: an object with a stable `id` and a human
+ * `label`. Older gateways sent a bare string, so the serializer accepts both shapes — a
+ * strict List<String> made the whole provider list fail to decode on current servers.
+ */
+@Serializable(with = ModelIdSerializer::class)
+data class ModelIdDto(val id: String, val label: String? = null)
+
+object ModelIdSerializer : KSerializer<ModelIdDto> {
+    override val descriptor: SerialDescriptor =
+        PrimitiveSerialDescriptor("ModelIdDto", PrimitiveKind.STRING)
+
+    override fun deserialize(decoder: Decoder): ModelIdDto {
+        val input = decoder as? JsonDecoder ?: return ModelIdDto(decoder.decodeString())
+        return when (val element = input.decodeJsonElement()) {
+            is JsonPrimitive -> ModelIdDto(element.content)
+            is JsonObject -> ModelIdDto(
+                id = (element["id"] as? JsonPrimitive)?.contentOrNull.orEmpty(),
+                label = (element["label"] as? JsonPrimitive)?.contentOrNull,
+            )
+            else -> ModelIdDto("")
+        }
+    }
+
+    override fun serialize(encoder: Encoder, value: ModelIdDto) {
+        // Only ever read from the API; write the id so an accidental re-encode stays valid.
+        encoder.encodeString(value.id)
+    }
+}
+
+/**
+ * GET /api/providers — the real catalog on current servers (replaces /api/model/options).
+ * `models` holds objects ({id,label}); older servers sent plain strings.
+ */
+@Serializable data class ProviderDto(
+    val id: String = "",
+    @SerialName("display_name") val displayName: String? = null,
+    @SerialName("has_key") val hasKey: Boolean = false,
+    val models: List<ModelIdDto> = emptyList(),
+    @SerialName("models_total") val modelsTotal: Int = 0,
+)
+@Serializable data class ProvidersDto(
+    val providers: List<ProviderDto> = emptyList(),
+    @SerialName("active_provider") val activeProvider: String? = null,
+)
+
+/** GET /api/models/live?provider=<slug> — the provider's live model entries ({id,label} objects,
+ *  or plain strings from an older server). */
+@Serializable data class LiveModelsDto(
+    val provider: String? = null,
+    val models: List<ModelIdDto> = emptyList(),
+    val count: Int = 0,
+)
 
 @Serializable data class SessionStatsDto(
     val total: Int = 0,

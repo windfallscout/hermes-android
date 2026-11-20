@@ -25,6 +25,7 @@ import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -293,5 +294,99 @@ class ChatViewModelTest {
 
         assertTrue("a gateway rejection must surface a persona error", vm.personaUi.value.error != null)
         assertEquals(null, vm.personaUi.value.active)
+    }
+
+    @Test fun onEffortChange_switches_to_sibling_model_when_catalog_has_one() = runTest {
+        coEvery { modelRepo.providers() } returns listOf(
+            com.hermes.client.data.network.ModelProviderDto(
+                slug = "opencode-go",
+                models = listOf("claude-opus-5-5-low", "claude-opus-5-5-high"),
+            ),
+        )
+        val vm = buildVm()
+        vm.open("s1"); advanceUntilIdle()
+        vm.onSelectFromSheet("opencode-go", "claude-opus-5-5-low") {}; advanceUntilIdle()
+
+        vm.onEffortChange("high"); advanceUntilIdle()
+
+        coVerify { chatRepo.slashExec("s1", "/model claude-opus-5-5-high --provider opencode-go --session") }
+        assertEquals("claude-opus-5-5-high", vm.currentModel.value)
+        assertEquals(null, vm.currentEffort.value)
+        assertFalse(vm.modelSheet.value.pending)
+        assertEquals(null, vm.modelSheet.value.error)
+    }
+
+    @Test fun onEffortChange_sends_reasoning_slash_when_no_sibling_exists() = runTest {
+        coEvery { modelRepo.providers() } returns listOf(
+            com.hermes.client.data.network.ModelProviderDto(
+                slug = "anthropic",
+                models = listOf("claude-opus-5-5"),
+            ),
+        )
+        val vm = buildVm()
+        vm.open("s1"); advanceUntilIdle()
+        vm.onSelectFromSheet("anthropic", "claude-opus-5-5") {}; advanceUntilIdle()
+
+        vm.onEffortChange("xhigh"); advanceUntilIdle()
+
+        coVerify { chatRepo.slashExec("s1", "/reasoning xhigh") }
+        assertEquals("xhigh", vm.currentEffort.value)
+        assertFalse(vm.modelSheet.value.pending)
+        assertEquals(null, vm.modelSheet.value.error)
+    }
+
+    @Test fun onEffortChange_default_scope_appends_global_and_surfaces_error_on_failure() = runTest {
+        coEvery { chatRepo.slashExec("s1", "/reasoning medium --global") } throws RuntimeException("reasoning failed")
+        val vm = buildVm()
+        vm.open("s1"); advanceUntilIdle()
+        vm.onSheetScope(com.hermes.client.ui.models.ModelScope.DEFAULT)
+
+        vm.onEffortChange("medium"); advanceUntilIdle()
+
+        coVerify { chatRepo.slashExec("s1", "/reasoning medium --global") }
+        assertEquals(null, vm.currentEffort.value)
+        assertFalse(vm.modelSheet.value.pending)
+        assertEquals("reasoning failed", vm.modelSheet.value.error)
+    }
+
+    @Test fun providers_load_failure_clears_pending_and_exposes_retry() = runTest {
+        coEvery { modelRepo.providers() } throws RuntimeException("bad json")
+        val vm = buildVm()
+        vm.open("s1")
+        advanceUntilIdle()
+
+        assertFalse(vm.providerLoad.value.loading)
+        assertTrue(vm.providerLoad.value.error != null)
+        assertFalse(vm.modelSheet.value.pending)
+
+        coEvery { modelRepo.providers() } returns listOf(
+            com.hermes.client.data.network.ModelProviderDto(
+                slug = "opencode-go",
+                name = "opencode-go",
+                models = listOf("deepseek-v4.1-flash"),
+            ),
+        )
+        vm.retryProviders()
+        advanceUntilIdle()
+
+        assertNull(vm.providerLoad.value.error)
+        assertEquals(1, vm.providers.value.size)
+    }
+
+    @Test fun providers_load_success_clears_loading() = runTest {
+        coEvery { modelRepo.providers() } returns listOf(
+            com.hermes.client.data.network.ModelProviderDto(
+                slug = "opencode-go",
+                name = "opencode-go",
+                models = listOf("deepseek-v4.1-flash"),
+            ),
+        )
+        val vm = buildVm()
+        vm.open("s1")
+        advanceUntilIdle()
+
+        assertFalse(vm.providerLoad.value.loading)
+        assertNull(vm.providerLoad.value.error)
+        assertEquals(1, vm.providers.value.size)
     }
 }

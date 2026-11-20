@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.union
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -53,13 +54,18 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.PlainTooltip
+import androidx.compose.material3.TooltipBox
+import androidx.compose.material3.TooltipDefaults
 import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.material3.rememberModalBottomSheetState
+import androidx.compose.material3.rememberTooltipState
 import com.hermes.client.ui.theme.LocalProfileAccent
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.text.style.TextOverflow
 import kotlinx.coroutines.launch
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -102,8 +108,10 @@ fun ChatScreen(
     val unauthorized by vm.unauthorized.collectAsStateWithLifecycle()
     val currentModel by vm.currentModel.collectAsStateWithLifecycle()
     val providers by vm.providers.collectAsStateWithLifecycle()
+    val providerLoad by vm.providerLoad.collectAsStateWithLifecycle()
     val favorites by vm.favorites.collectAsStateWithLifecycle()
     val currentProvider by vm.currentProvider.collectAsStateWithLifecycle()
+    val currentEffort by vm.currentEffort.collectAsStateWithLifecycle()
     val modelSheet by vm.modelSheet.collectAsStateWithLifecycle()
     var modelSheetOpen by rememberSaveable { mutableStateOf(false) }
     val activeProfile by vm.activeProfile.collectAsStateWithLifecycle()
@@ -256,21 +264,10 @@ fun ChatScreen(
                             tint = com.hermes.client.ui.components.AccentChrome.onBar,
                         )
                     }
-                    AssistChip(
+                    ModelChip(
+                        currentProvider = currentProvider,
+                        currentModel = currentModel,
                         onClick = { modelSheetOpen = true },
-                        modifier = Modifier.minimumInteractiveComponentSize(),
-                        label = { Text(currentModel ?: "Model", maxLines = 1) },
-                        trailingIcon = {
-                            Icon(
-                                Icons.Rounded.ArrowDropDown,
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        },
-                        colors = androidx.compose.material3.AssistChipDefaults.assistChipColors(
-                            labelColor = com.hermes.client.ui.components.AccentChrome.onBar,
-                            trailingIconContentColor = com.hermes.client.ui.components.AccentChrome.onBar,
-                        ),
                     )
                     StatusDot(connState)
                     Box {
@@ -602,7 +599,12 @@ fun ChatScreen(
             onToggleFavorite = vm::toggleFavorite,
             onSelect = { p, m -> vm.onSelectFromSheet(p, m) { modelSheetOpen = false } },
             pending = modelSheet.pending, error = modelSheet.error,
+            catalogLoading = providerLoad.loading,
+            catalogError = providerLoad.error,
+            onRetry = { vm.retryProviders() },
             onDismiss = { modelSheetOpen = false },
+            effort = com.hermes.client.ui.models.effectiveEffort(currentModel, currentEffort),
+            onEffortChange = vm::onEffortChange,
         )
     }
 
@@ -638,6 +640,53 @@ fun ChatScreen(
             onPick = { vm.setPersona(it) },
             onRetry = { vm.loadPersonas() },
             onDismiss = { showPersonaSheet = false },
+        )
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+internal fun ModelChip(
+    currentProvider: String?,
+    currentModel: String?,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val fullName = remember(currentProvider, currentModel) {
+        when {
+            currentModel == null -> "Select model"
+            !currentProvider.isNullOrBlank() -> "$currentProvider:$currentModel"
+            else -> currentModel
+        }
+    }
+    TooltipBox(
+        positionProvider = TooltipDefaults.rememberPlainTooltipPositionProvider(),
+        tooltip = { PlainTooltip { Text(fullName) } },
+        state = rememberTooltipState(),
+    ) {
+        AssistChip(
+            onClick = onClick,
+            modifier = modifier
+                .widthIn(max = 140.dp)
+                .minimumInteractiveComponentSize(),
+            label = {
+                Text(
+                    text = currentModel ?: "Model",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
+            },
+            trailingIcon = {
+                Icon(
+                    Icons.Rounded.ArrowDropDown,
+                    contentDescription = null,
+                    modifier = Modifier.size(18.dp),
+                )
+            },
+            colors = androidx.compose.material3.AssistChipDefaults.assistChipColors(
+                labelColor = com.hermes.client.ui.components.AccentChrome.onBar,
+                trailingIconContentColor = com.hermes.client.ui.components.AccentChrome.onBar,
+            ),
         )
     }
 }

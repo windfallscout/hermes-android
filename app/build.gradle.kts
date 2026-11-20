@@ -31,6 +31,15 @@ android {
         manifestPlaceholders["appLabel"] = "Hermes"
     }
     signingConfigs {
+        // Committed on purpose, debug-only, so local and CI debug builds share one signature;
+        // password is the public Android debug default; never used for release/beta.
+        getByName("debug").apply {
+            storeFile = file("debug.keystore") // resolves to app/debug.keystore
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+            storeType = "PKCS12"
+        }
         if (keystorePropsFile.exists()) {
             create("release") {
                 storeFile = rootProject.file(keystoreProps.getProperty("storeFile"))
@@ -73,6 +82,14 @@ android {
 kotlin {
     compilerOptions {
         jvmTarget.set(JvmTarget.JVM_17)
+    }
+}
+
+// CI runs `testDebugUnitTest`; without this a failing assertion only logs "AssertionError at Foo.kt:24".
+tasks.withType<Test>().configureEach {
+    testLogging {
+        events("failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
     }
 }
 

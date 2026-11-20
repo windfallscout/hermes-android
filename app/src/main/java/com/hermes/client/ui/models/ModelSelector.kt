@@ -25,6 +25,7 @@ import androidx.compose.material3.SegmentedButton
 import androidx.compose.material3.SegmentedButtonDefaults
 import androidx.compose.material3.SingleChoiceSegmentedButtonRow
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
@@ -36,6 +37,22 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.hermes.client.data.network.ModelProviderDto
 import com.hermes.client.data.repository.favKey
+
+/**
+ * What the catalog area of the picker should render. An error always wins over the spinner, so a
+ * failed catalog fetch can never present as endless loading.
+ */
+sealed interface CatalogStatus {
+    data object Loading : CatalogStatus
+    data class Failed(val message: String) : CatalogStatus
+    data object Ready : CatalogStatus
+}
+
+fun catalogStatus(loading: Boolean, error: String?): CatalogStatus = when {
+    !error.isNullOrBlank() -> CatalogStatus.Failed(error)
+    loading -> CatalogStatus.Loading
+    else -> CatalogStatus.Ready
+}
 
 /** Which model slot a selection applies to. */
 enum class ModelScope { SESSION, DEFAULT }
@@ -116,6 +133,9 @@ fun ModelSelectorContent(
     modifier: Modifier = Modifier,
     effort: String? = null,
     onEffortChange: ((String) -> Unit)? = null,
+    catalogLoading: Boolean = false,
+    catalogError: String? = null,
+    onRetry: (() -> Unit)? = null,
 ) {
     Column(modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
         if (scope != null) {
@@ -171,8 +191,37 @@ fun ModelSelectorContent(
                 modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
             )
         }
-        if (pending) {
+        val status = catalogStatus(catalogLoading, catalogError)
+        // One spinner at a time: a catalog fetch is already rendering the loading row above.
+        if (pending && status != CatalogStatus.Loading) {
             CircularProgressIndicator(Modifier.padding(vertical = 8.dp))
+        }
+
+        when (status) {
+            is CatalogStatus.Failed -> Row(
+                modifier = Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Text(
+                    text = status.message,
+                    color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.weight(1f).padding(end = 8.dp),
+                )
+                if (onRetry != null) {
+                    TextButton(onClick = onRetry) { Text("Retry") }
+                }
+            }
+            CatalogStatus.Loading -> CircularProgressIndicator(Modifier.padding(vertical = 8.dp))
+            CatalogStatus.Ready -> if (items.isEmpty()) {
+                Text(
+                    text = "No models found.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 8.dp),
+                )
+            }
         }
 
         LazyColumn(Modifier.fillMaxWidth()) {
@@ -262,6 +311,9 @@ fun ModelSelectorSheet(
     onSelect: (provider: String, model: String) -> Unit,
     pending: Boolean,
     error: String?,
+    catalogLoading: Boolean = false,
+    catalogError: String? = null,
+    onRetry: (() -> Unit)? = null,
     onDismiss: () -> Unit,
     effort: String? = null,
     onEffortChange: ((String) -> Unit)? = null,
@@ -281,6 +333,9 @@ fun ModelSelectorSheet(
             modifier = Modifier.padding(bottom = 24.dp),
             effort = effort,
             onEffortChange = onEffortChange,
+            catalogLoading = catalogLoading,
+            catalogError = catalogError,
+            onRetry = onRetry,
         )
     }
 }

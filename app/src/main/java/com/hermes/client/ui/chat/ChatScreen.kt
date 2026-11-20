@@ -108,6 +108,7 @@ fun ChatScreen(
     val unauthorized by vm.unauthorized.collectAsStateWithLifecycle()
     val currentModel by vm.currentModel.collectAsStateWithLifecycle()
     val providers by vm.providers.collectAsStateWithLifecycle()
+    val providerLoad by vm.providerLoad.collectAsStateWithLifecycle()
     val favorites by vm.favorites.collectAsStateWithLifecycle()
     val currentProvider by vm.currentProvider.collectAsStateWithLifecycle()
     val currentEffort by vm.currentEffort.collectAsStateWithLifecycle()
@@ -598,6 +599,9 @@ fun ChatScreen(
             onToggleFavorite = vm::toggleFavorite,
             onSelect = { p, m -> vm.onSelectFromSheet(p, m) { modelSheetOpen = false } },
             pending = modelSheet.pending, error = modelSheet.error,
+            catalogLoading = providerLoad.loading,
+            catalogError = providerLoad.error,
+            onRetry = { vm.retryProviders() },
             onDismiss = { modelSheetOpen = false },
             effort = com.hermes.client.ui.models.effectiveEffort(currentModel, currentEffort),
             onEffortChange = vm::onEffortChange,

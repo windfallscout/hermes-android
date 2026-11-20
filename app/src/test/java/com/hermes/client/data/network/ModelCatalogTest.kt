@@ -1,5 +1,6 @@
 package com.hermes.client.data.network
 
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -11,7 +12,13 @@ class ModelCatalogTest {
             id = "opencode-go",
             displayName = "OpenCode Go",
             hasKey = true,
-            models = listOf("  ", "gpt-5.5", "GPT-5.5", "  claude-sonnet-4  ", ""),
+            models = listOf(
+                ModelIdDto("  "),
+                ModelIdDto("gpt-5.5"),
+                ModelIdDto("GPT-5.5"),
+                ModelIdDto("  claude-sonnet-4  "),
+                ModelIdDto(""),
+            ),
         )
         val mapped = providerToDto(withDisplayName, activeProvider = "opencode-go")
         assertEquals("opencode-go", mapped.slug)
@@ -23,7 +30,7 @@ class ModelCatalogTest {
             id = "anthropic",
             displayName = "   ",
             hasKey = false,
-            models = listOf("opus"),
+            models = listOf(ModelIdDto("opus")),
         )
         val fallbackMapped = providerToDto(blankDisplayName, activeProvider = "opencode-go")
         assertEquals("anthropic", fallbackMapped.slug)
@@ -32,6 +39,61 @@ class ModelCatalogTest {
 
         val nullDisplayName = ProviderDto(id = "openai", displayName = null)
         assertEquals("openai", providerToDto(nullDisplayName, activeProvider = null).name)
+    }
+
+    @Test fun models_decode_object_shape_and_legacy_strings() {
+        val json = Json { ignoreUnknownKeys = true }
+        val payload = """
+            {
+              "providers": [
+                {
+                  "id": "opencode-go",
+                  "has_key": true,
+                  "models": [
+                    {"id": "deepseek-v4.1-flash", "label": "DeepSeek V4.1 Flash"},
+                    {"id": "glm-5"}
+                  ],
+                  "models_total": 29
+                },
+                {
+                  "id": "legacy",
+                  "models": ["legacy-model"]
+                }
+              ],
+              "active_provider": "opencode-go"
+            }
+        """.trimIndent()
+        val decoded = json.decodeFromString<ProvidersDto>(payload)
+        assertEquals(2, decoded.providers.size)
+        assertEquals("DeepSeek V4.1 Flash", decoded.providers[0].models[0].label)
+        assertEquals(
+            listOf("deepseek-v4.1-flash", "glm-5"),
+            providerToDto(decoded.providers[0], decoded.activeProvider).models,
+        )
+        assertEquals(
+            listOf("legacy-model"),
+            providerToDto(decoded.providers[1], decoded.activeProvider).models,
+        )
+    }
+
+    @Test fun live_models_decode_object_shape_and_legacy_strings() {
+        val json = Json { ignoreUnknownKeys = true }
+        val objectLive = json.decodeFromString<LiveModelsDto>(
+            """{"provider":"opencode-go","models":[{"id":"deepseek-v4.1-flash","label":"DeepSeek V4.1 Flash"},{"id":""}],"count":2}""",
+        )
+        assertEquals(listOf("deepseek-v4.1-flash"), modelIds(objectLive.models))
+
+        val legacyLive = json.decodeFromString<LiveModelsDto>(
+            """{"models":["legacy-model"]}""",
+        )
+        assertEquals(listOf("legacy-model"), modelIds(legacyLive.models))
+    }
+
+    @Test fun modelIds_drops_blank_ids_and_dedupes() {
+        assertEquals(
+            listOf("a", "b"),
+            modelIds(listOf(ModelIdDto(" a "), ModelIdDto("A"), ModelIdDto(""), ModelIdDto("b"))),
+        )
     }
 
     @Test fun mergeModels_puts_live_first_dedupes_case_insensitively_and_drops_blanks() {

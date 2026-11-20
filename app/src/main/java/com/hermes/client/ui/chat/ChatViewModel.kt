@@ -57,6 +57,35 @@ class ChatViewModel @Inject constructor(
     private val _providers = MutableStateFlow<List<com.hermes.client.data.network.ModelProviderDto>>(emptyList())
     val providers: kotlinx.coroutines.flow.StateFlow<List<com.hermes.client.data.network.ModelProviderDto>> = _providers.asStateFlow()
 
+    /** Catalog fetch state for the model sheet — a failure must show an error + Retry, never spin. */
+    data class ProviderLoadUi(val loading: Boolean = false, val error: String? = null)
+    private val _providerLoad = MutableStateFlow(ProviderLoadUi())
+    val providerLoad: StateFlow<ProviderLoadUi> = _providerLoad.asStateFlow()
+
+    /** (Re)load the provider catalog; clears any selection spinner first so a fetch never looks stuck. */
+    private fun loadProviders() {
+        if (_providerLoad.value.loading) return
+        _modelSheet.value = _modelSheet.value.copy(pending = false)
+        _providerLoad.value = ProviderLoadUi(loading = true)
+        viewModelScope.launch {
+            runCatching { modelRepo.providers() }
+                .onSuccess {
+                    _providers.value = it
+                    _providerLoad.value = ProviderLoadUi()
+                }
+                .onFailure { e ->
+                    if (e is kotlinx.coroutines.CancellationException) throw e
+                    _providerLoad.value = ProviderLoadUi(
+                        loading = false,
+                        error = e.message ?: "Failed to load models",
+                    )
+                }
+        }
+    }
+
+    /** Retry the catalog fetch after a failure (model sheet's Retry action). */
+    fun retryProviders() = loadProviders()
+
     // Provider of the confirmed session model (set together with _currentModel on a successful switch).
     private val _currentProvider = MutableStateFlow<String?>(null)
     val currentProvider: kotlinx.coroutines.flow.StateFlow<String?> = _currentProvider.asStateFlow()
@@ -162,7 +191,7 @@ class ChatViewModel @Inject constructor(
                 }
             }
             // Load model options, profiles, and the slash-command catalog; failures are non-fatal
-            launch { runCatching { _providers.value = modelRepo.providers() } }
+            loadProviders()
             launch { runCatching { _profiles.value = profileRepo.list() } }
             launch { runCatching { _commands.value = chat.commandsCatalog() } }
         }

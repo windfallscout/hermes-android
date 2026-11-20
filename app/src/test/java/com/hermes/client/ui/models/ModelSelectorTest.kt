@@ -135,4 +135,14 @@ class ModelSelectorTest {
         assertEquals("high", modelRows.first { it.model == "claude-opus-5-5-high" }.effort)
         assertNull(modelRows.first { it.model == "gpt-5.5" }.effort)
     }
+
+    @Test fun catalogStatus_error_wins_over_loading() {
+        assertEquals(CatalogStatus.Failed("boom"), catalogStatus(loading = true, error = "boom"))
+    }
+
+    @Test fun catalogStatus_loading_only_without_error() {
+        assertEquals(CatalogStatus.Loading, catalogStatus(loading = true, error = null))
+        assertEquals(CatalogStatus.Ready, catalogStatus(loading = false, error = null))
+        assertEquals(CatalogStatus.Failed("x"), catalogStatus(loading = false, error = "x"))
+    }
 }

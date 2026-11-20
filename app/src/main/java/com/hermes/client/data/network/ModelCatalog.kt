@@ -1,12 +1,15 @@
 package com.hermes.client.data.network
 
+/** Object-shaped model entries → their stable ids (blank ids dropped, order preserved). */
+fun modelIds(models: List<ModelIdDto>): List<String> = cleanModels(models.map { it.id })
+
 /** Maps a /api/providers row onto the UI-facing provider shape; blanks dropped, order preserved. */
 fun providerToDto(p: ProviderDto, activeProvider: String?): ModelProviderDto =
     ModelProviderDto(
         slug = p.id,
         name = p.displayName?.takeIf { it.isNotBlank() } ?: p.id,
         isCurrent = p.id == activeProvider,
-        models = cleanModels(p.models),
+        models = modelIds(p.models),
     )
 
 /** Live ids first, then static ids the live list did not report — case-insensitive dedupe. */

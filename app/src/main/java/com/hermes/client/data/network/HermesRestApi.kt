@@ -109,7 +109,7 @@ class HermesRestApi(
     /** Live model ids for [provider] from /api/models/live. */
     suspend fun liveModels(provider: String): List<String> {
         val encoded = java.net.URLEncoder.encode(provider, "UTF-8")
-        return get<LiveModelsDto>("/api/models/live?provider=$encoded").models
+        return modelIds(get<LiveModelsDto>("/api/models/live?provider=$encoded").models)
     }
 
     /**

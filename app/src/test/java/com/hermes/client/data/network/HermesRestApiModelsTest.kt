@@ -26,14 +26,14 @@ class HermesRestApiModelsTest {
         server.enqueue(MockResponse.Builder().code(200).body(
             """{
                 "providers": [
-                    {"id": "opencode-go", "display_name": "OpenCode Go", "has_key": true, "configurable": false, "models": [], "models_total": 2},
+                    {"id": "opencode-go", "display_name": "OpenCode Go", "has_key": true, "configurable": false, "models": [{"id":"deepseek-v4.1-flash","label":"DeepSeek V4.1 Flash"},{"id":"glm-5","label":"GLM-5"}], "models_total": 2},
                     {"id": "local-vllm", "display_name": "", "has_key": false, "models": ["llama-3.3-70b"], "models_total": 1}
                 ],
                 "active_provider": "opencode-go"
             }"""
         ).build())
         server.enqueue(MockResponse.Builder().code(200).body(
-            """{"provider": "opencode-go", "models": ["deepseek-v4.1-flash", "glm-5"], "count": 2}"""
+            """{"provider": "opencode-go", "models": [{"id":"deepseek-v4.1-flash","label":"DeepSeek V4.1 Flash"},{"id":"glm-5","label":"GLM-5"}], "count": 2}"""
         ).build())
 
         val result = api(server).modelProviders()
@@ -54,6 +54,29 @@ class HermesRestApiModelsTest {
         assertEquals("/api/providers", first.target)
         val second = server.takeRequest()
         assertEquals("/api/models/live?provider=opencode-go", second.target)
+    }
+
+    @Test fun live_models_object_shape_merges_into_static_models() = runTest {
+        val server = serverRule.server
+        server.enqueue(MockResponse.Builder().code(200).body(
+            """{
+                "providers": [
+                    {"id": "opencode-go", "display_name": "OpenCode Go", "has_key": true, "models": [{"id":"deepseek-v4.1-flash","label":"DeepSeek V4.1 Flash"},{"id":"static-only","label":"Static Only"}], "models_total": 2}
+                ],
+                "active_provider": "opencode-go"
+            }"""
+        ).build())
+        server.enqueue(MockResponse.Builder().code(200).body(
+            """{"provider": "opencode-go", "models": [{"id":"live-first","label":"Live First"},{"id":"deepseek-v4.1-flash","label":"DeepSeek V4.1 Flash"}], "count": 2}"""
+        ).build())
+
+        val result = api(server).modelProviders()
+
+        assertEquals(1, result.size)
+        assertEquals(
+            listOf("live-first", "deepseek-v4.1-flash", "static-only"),
+            result[0].models,
+        )
     }
 
     @Test fun modelProviders_falls_back_to_model_options_on_404() = runTest {

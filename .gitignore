@@ -18,6 +18,9 @@ keystore.properties
 keystore/
 *.jks
 *.keystore
+# Exception: the pinned DEBUG key is committed on purpose so local and CI debug APKs
+# share one signature. Debug-only, well-known password — not a release secret.
+!app/debug.keystore
 
 # Local tooling
 .claude/

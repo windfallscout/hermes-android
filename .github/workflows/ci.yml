@@ -1,7 +1,8 @@
 name: CI
 
 # Build + unit-test every push and PR to the production and beta branches.
-# Uses an unsigned debug build, so it needs no secrets.
+# Signed with the committed pinned debug keystore (app/debug.keystore) so debug
+# APKs keep a stable signature — still no secrets required.
 on:
   push:
     branches: [main, dev]
@@ -19,8 +20,17 @@ jobs:
           java-version: '21'
       - uses: android-actions/setup-android@v4
       - run: chmod +x ./gradlew
-      - name: Build & unit test (unsigned debug)
+      - name: Build & unit test (debug)
         run: ./gradlew :app:assembleDebug :app:testDebugUnitTest --no-daemon
+      - name: Verify debug APK is signed with the pinned debug key
+        run: |
+          set -euo pipefail
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          APKSIGNER="$(ls "$SDK"/build-tools/*/apksigner | sort -V | tail -n1)"
+          ACTUAL="$("$APKSIGNER" verify --print-certs app/build/outputs/apk/debug/app-debug.apk \
+            | sed -n 's/^Signer #1 certificate SHA-256 digest: //p' | head -n1 | tr -d ':' | tr 'A-F' 'a-f')"
+          echo "APK signer SHA-256: $ACTUAL"
+          test "$ACTUAL" = "d243d7b6247feb0d119ffb1171b086c14dd21c827b42c6d1efb8275f7ad0d4e6"
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
